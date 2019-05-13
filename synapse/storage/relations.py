@@ -17,7 +17,9 @@ import logging
 
 import attr
 
-from synapse.api.constants import RelationTypes
+from twisted.internet import defer
+
+from synapse.api.constants import EventTypes, RelationTypes
 from synapse.api.errors import SynapseError
 from synapse.storage._base import SQLBaseStore
 from synapse.storage.stream import generic_bound
@@ -301,6 +303,41 @@ class RelationsStore(SQLBaseStore):
         return self.runInteraction(
             "get_aggregation_groups_for_event", _get_aggregation_groups_for_event_txn
         )
+
+    @defer.inlineCallbacks
+    def get_applicable_edit(self, event):
+        if event.type != EventTypes.Message:
+            return
+
+        sql = """
+            SELECT event_id, origin_server_ts FROM events
+            INNER JOIN event_relations USING (event_id)
+            WHERE
+                relates_to_id = ?
+                AND relation_type = ?
+                AND type = ?
+                AND sender = ?
+            ORDER by origin_server_ts DESC, event_id DESC
+            LIMIT 1
+        """
+
+        def _get_applicable_edit_txn(txn):
+            txn.execute(
+                sql, (event.event_id, RelationTypes.REPLACES, event.type, event.sender)
+            )
+            row = txn.fetchone()
+            if row:
+                return row[0]
+
+        event_id = yield self.runInteraction(
+            "get_applicable_edit", _get_applicable_edit_txn
+        )
+
+        if not event_id:
+            return
+
+        edit_event = yield self.get_event(event_id, allow_none=True)
+        return edit_event
 
     def _handle_event_relations(self, txn, event):
         relation = event.content.get("m.relates_to")

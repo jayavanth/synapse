@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import itertools
+import json
 
 import six
 
@@ -290,8 +291,6 @@ class RelationsTestCase(unittest.HomeserverTestCase):
         self.render(request)
         self.assertEquals(200, channel.code, channel.json_body)
 
-        self.maxDiff = None
-
         self.assertEquals(
             channel.json_body["unsigned"].get("m.relations"),
             {
@@ -307,7 +306,29 @@ class RelationsTestCase(unittest.HomeserverTestCase):
             },
         )
 
-    def _send_relation(self, relation_type, event_type, key=None):
+    def test_edit(self):
+        new_body = {"msgtype": "m.text", "body": "I've been edited!"}
+        channel = self._send_relation(
+            RelationTypes.REPLACES, "m.room.message", content=new_body
+        )
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        edit_event_id = channel.json_body["event_id"]
+
+        request, channel = self.make_request(
+            "GET", "/rooms/%s/event/%s" % (self.room, self.parent_id)
+        )
+        self.render(request)
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        self.assertEquals(channel.json_body["content"], new_body)
+
+        self.assertEquals(
+            channel.json_body["unsigned"].get("m.relations"),
+            {RelationTypes.REPLACES: {"event_id": edit_event_id}},
+        )
+
+    def _send_relation(self, relation_type, event_type, key=None, content={}):
         query = ""
         if key:
             query = "?key=" + six.moves.urllib.parse.quote_plus(key)
@@ -316,7 +337,7 @@ class RelationsTestCase(unittest.HomeserverTestCase):
             "POST",
             "/_matrix/client/unstable/rooms/%s/send_relation/%s/%s/%s%s"
             % (self.room, self.parent_id, relation_type, event_type, query),
-            b"{}",
+            json.dumps(content).encode("utf-8"),
         )
         self.render(request)
         return channel

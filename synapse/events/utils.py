@@ -334,7 +334,28 @@ class EventClientSerializer(object):
         references = yield self.store.get_relations_for_event(
             event.event_id, RelationTypes.REFERENCES, direction="f",
         )
+
+        edit = None
+        if event.type == EventTypes.Message:
+            edit = yield self.store.get_applicable_edit(event)
+
         event = serialize_event(event, time_now, **kwargs)
+
+        if edit:
+            # If there is an edit replace the content, preserving existing
+            # relations.
+
+            relations = event["content"].get("m.relates_to")
+            event["content"] = edit.content
+            if relations:
+                event["content"]["m.relates_to"] = relations
+            else:
+                event["content"].pop("m.relates_to", None)
+
+            r = event["unsigned"].setdefault("m.relations", {})
+            r[RelationTypes.REPLACES] = {
+                "event_id": edit.event_id,
+            }
 
         if annotations.chunk:
             r = event["unsigned"].setdefault("m.relations", {})
