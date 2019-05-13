@@ -13,11 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
+
+import six
+
 from synapse.api.constants import EventTypes, RelationTypes
 from synapse.rest.client.v1 import login, room
 from synapse.rest.client.v2_alpha import relations
-
-import six
 
 from tests import unittest
 
@@ -66,7 +68,7 @@ class RelationsTestCase(unittest.HomeserverTestCase):
         channel = self._send_relation(RelationTypes.ANNOTATION, EventTypes.Member)
         self.assertEquals(400, channel.code, channel.json_body)
 
-    def test_paginate(self):
+    def test_basic_paginate_relations(self):
         channel = self._send_relation(RelationTypes.ANNOTATION, "m.reaction")
         self.assertEquals(200, channel.code, channel.json_body)
 
@@ -82,15 +84,150 @@ class RelationsTestCase(unittest.HomeserverTestCase):
         self.render(request)
         self.assertEquals(200, channel.code, channel.json_body)
 
+        # Check that the result only has "chunk" and "next_batch" keys, and that
+        # next_batch looks maybe correct.
         self.assertEquals(
-            channel.json_body,
-            {
-                "limited": True,
-                "chunk": [{"event_id": annotation_id}],
-                "prev_batch": None,
-                "next_batch": None,
-            },
+            set(channel.json_body.keys()), {"chunk", "next_batch"}, channel.json_body
         )
+        self.assertEquals(len(channel.json_body["chunk"]), 1, channel.json_body)
+
+        self.assert_dict({"event_id": annotation_id}, channel.json_body["chunk"][0])
+        self.assertIsInstance(
+            channel.json_body.get("next_batch"), six.string_types, channel.json_body
+        )
+
+    def test_repeated_paginate_relations(self):
+        expected_event_ids = []
+        for _ in range(10):
+            channel = self._send_relation(RelationTypes.ANNOTATION, "m.reaction")
+            self.assertEquals(200, channel.code, channel.json_body)
+            expected_event_ids.append(channel.json_body["event_id"])
+
+        prev_token = None
+        found_event_ids = []
+        for _ in range(20):
+            from_token = ""
+            if prev_token:
+                from_token = "&from=" + prev_token
+
+            request, channel = self.make_request(
+                "GET",
+                "/_matrix/client/unstable/rooms/%s/relations/%s?limit=1%s"
+                % (self.room, self.parent_id, from_token),
+            )
+            self.render(request)
+            self.assertEquals(200, channel.code, channel.json_body)
+
+            found_event_ids.extend(e["event_id"] for e in channel.json_body["chunk"])
+            next_batch = channel.json_body.get("next_batch")
+
+            self.assertNotEquals(prev_token, next_batch)
+            prev_token = next_batch
+
+            if not prev_token:
+                break
+
+        # We paginated backwards, so reverse
+        found_event_ids.reverse()
+        self.assertEquals(found_event_ids, expected_event_ids)
+
+    def test_aggregation_pagination_groups(self):
+        sent_groups = {"👍": 10, "a": 7, "b": 5, "c": 3, "d": 2, "e": 1}
+        for key in itertools.chain.from_iterable(
+            itertools.repeat(key, num) for key, num in sent_groups.items()
+        ):
+            channel = self._send_relation(
+                RelationTypes.ANNOTATION, "m.reaction", key=key
+            )
+            self.assertEquals(200, channel.code, channel.json_body)
+
+        prev_token = None
+        found_groups = {}
+        for _ in range(20):
+            from_token = ""
+            if prev_token:
+                from_token = "&from=" + prev_token
+
+            request, channel = self.make_request(
+                "GET",
+                "/_matrix/client/unstable/rooms/%s/aggregations/%s?limit=1%s"
+                % (self.room, self.parent_id, from_token),
+            )
+            self.render(request)
+            self.assertEquals(200, channel.code, channel.json_body)
+
+            self.assertEqual(len(channel.json_body["chunk"]), 1, channel.json_body)
+
+            for groups in channel.json_body["chunk"]:
+                # We only expect reactions
+                self.assertEqual(groups["type"], "m.reaction", channel.json_body)
+
+                # We should only see each key once
+                self.assertNotIn(groups["key"], found_groups, channel.json_body)
+
+                found_groups[groups["key"]] = groups["count"]
+
+            next_batch = channel.json_body.get("next_batch")
+
+            self.assertNotEquals(prev_token, next_batch)
+            prev_token = next_batch
+
+            if not prev_token:
+                break
+
+        self.assertEquals(sent_groups, found_groups)
+
+    def test_aggregation_pagination_within_group(self):
+        expected_event_ids = []
+        for _ in range(10):
+            channel = self._send_relation(
+                RelationTypes.ANNOTATION, "m.reaction", key="👍"
+            )
+            self.assertEquals(200, channel.code, channel.json_body)
+            expected_event_ids.append(channel.json_body["event_id"])
+
+        # Also send a different type of reaction so that we test we don't see it
+        channel = self._send_relation(RelationTypes.ANNOTATION, "m.reaction", key="a")
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        prev_token = None
+        found_event_ids = []
+        encoded_key = six.moves.urllib.parse.quote_plus("👍")
+        for _ in range(20):
+            from_token = ""
+            if prev_token:
+                from_token = "&from=" + prev_token
+
+            request, channel = self.make_request(
+                "GET",
+                "/_matrix/client/unstable/rooms/%s"
+                "/aggregations/%s/%s/m.reaction/%s?limit=1%s"
+                % (
+                    self.room,
+                    self.parent_id,
+                    RelationTypes.ANNOTATION,
+                    encoded_key,
+                    from_token,
+                ),
+            )
+            self.render(request)
+            self.assertEquals(200, channel.code, channel.json_body)
+
+            self.assertEqual(len(channel.json_body["chunk"]), 1, channel.json_body)
+
+            found_event_ids.extend(e["event_id"] for e in channel.json_body["chunk"])
+
+            next_batch = channel.json_body.get("next_batch")
+
+            self.assertNotEquals(prev_token, next_batch)
+            prev_token = next_batch
+
+            if not prev_token:
+                break
+
+        # We paginated backwards, so reverse
+        found_event_ids.reverse()
+        self.assertEquals(found_event_ids, expected_event_ids)
 
     def test_aggregation(self):
         channel = self._send_relation(RelationTypes.ANNOTATION, "m.reaction", "a")
@@ -113,13 +250,10 @@ class RelationsTestCase(unittest.HomeserverTestCase):
         self.assertEquals(
             channel.json_body,
             {
-                "limited": False,
                 "chunk": [
                     {"type": "m.reaction", "key": "a", "count": 2},
                     {"type": "m.reaction", "key": "b", "count": 1},
-                ],
-                "prev_batch": None,
-                "next_batch": None,
+                ]
             },
         )
 
@@ -165,16 +299,10 @@ class RelationsTestCase(unittest.HomeserverTestCase):
                     "chunk": [
                         {"type": "m.reaction", "key": "a", "count": 2},
                         {"type": "m.reaction", "key": "b", "count": 1},
-                    ],
-                    "limited": False,
-                    "next_batch": None,
-                    "prev_batch": None,
+                    ]
                 },
                 RelationTypes.REFERENCES: {
-                    "chunk": [{"event_id": reply_1}, {"event_id": reply_2}],
-                    "limited": False,
-                    "next_batch": None,
-                    "prev_batch": None,
+                    "chunk": [{"event_id": reply_1}, {"event_id": reply_2}]
                 },
             },
         )

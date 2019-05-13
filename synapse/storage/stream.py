@@ -64,58 +64,64 @@ _EventDictReturn = namedtuple(
 )
 
 
-def lower_bound(token, engine, inclusive=False):
-    inclusive = "=" if inclusive else ""
-    if token.topological is None:
-        return "(%d <%s %s)" % (token.stream, inclusive, "stream_ordering")
-    else:
-        if isinstance(engine, PostgresEngine):
-            # Postgres doesn't optimise ``(x < a) OR (x=a AND y<b)`` as well
-            # as it optimises ``(x,y) < (a,b)`` on multicolumn indexes. So we
-            # use the later form when running against postgres.
-            return "((%d,%d) <%s (%s,%s))" % (
-                token.topological,
-                token.stream,
-                inclusive,
-                "topological_ordering",
-                "stream_ordering",
-            )
-        return "(%d < %s OR (%d = %s AND %d <%s %s))" % (
-            token.topological,
-            "topological_ordering",
-            token.topological,
-            "topological_ordering",
-            token.stream,
-            inclusive,
-            "stream_ordering",
+def generic_bound(bound, names, values, engine):
+    assert(bound in (">", "<", ">=", "<="))
+
+    name1, name2 = names
+    val1, val2 = values
+
+    if val1 is None:
+        val2 = int(val2)
+        return "(%d %s %s)" % (val2, bound, name2)
+
+    val1 = int(val1)
+    val2 = int(val2)
+
+    if isinstance(engine, PostgresEngine):
+        # Postgres doesn't optimise ``(x < a) OR (x=a AND y<b)`` as well
+        # as it optimises ``(x,y) < (a,b)`` on multicolumn indexes. So we
+        # use the later form when running against postgres.
+        return "((%d,%d) %s (%s,%s))" % (
+            val1, val2,
+            bound,
+            name1, name2,
         )
+
+    # We want to generate queries of e.g. the form:
+    #
+    #   (val1 < name1 OR (val1 = name1 AND val2 <= name2))
+    #
+    # which is equivalent to (val1, val2) < (name1, name2)
+
+    return """(
+        {val1:d} {strict_bound} {name1}
+        OR ({val1:d} = {name1} AND {val2:d} {bound} {name2})
+    )""".format(
+        name1=name1,
+        val1=val1,
+        name2=name2,
+        val2=val2,
+        strict_bound=bound[0],  # The first bound must always be strict equality here
+        bound=bound,
+    )
+
+
+def lower_bound(token, engine, inclusive=False):
+    return generic_bound(
+        "<=" if inclusive else "<"
+        ("topological_ordering", "stream_ordering",),
+        (token.topological, token.stream,),
+        engine,
+    )
 
 
 def upper_bound(token, engine, inclusive=True):
-    inclusive = "=" if inclusive else ""
-    if token.topological is None:
-        return "(%d >%s %s)" % (token.stream, inclusive, "stream_ordering")
-    else:
-        if isinstance(engine, PostgresEngine):
-            # Postgres doesn't optimise ``(x > a) OR (x=a AND y>b)`` as well
-            # as it optimises ``(x,y) > (a,b)`` on multicolumn indexes. So we
-            # use the later form when running against postgres.
-            return "((%d,%d) >%s (%s,%s))" % (
-                token.topological,
-                token.stream,
-                inclusive,
-                "topological_ordering",
-                "stream_ordering",
-            )
-        return "(%d > %s OR (%d = %s AND %d >%s %s))" % (
-            token.topological,
-            "topological_ordering",
-            token.topological,
-            "topological_ordering",
-            token.stream,
-            inclusive,
-            "stream_ordering",
-        )
+    return generic_bound(
+        ">=" if inclusive else ">"
+        ("topological_ordering", "stream_ordering",),
+        (token.topological, token.stream,),
+        engine,
+    )
 
 
 def filter_to_clause(event_filter):

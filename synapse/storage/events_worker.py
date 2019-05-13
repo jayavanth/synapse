@@ -151,6 +151,20 @@ class EventsWorkerStore(SQLBaseStore):
 
         defer.returnValue({e.event_id: e for e in events})
 
+    def get_events_as_array(
+        self,
+        event_ids,
+        check_redacted=True,
+        get_prev_content=False,
+        allow_rejected=False,
+    ):
+        return self._get_events(
+            event_ids,
+            check_redacted,
+            get_prev_content,
+            allow_rejected,
+        )
+
     @defer.inlineCallbacks
     def _get_events(
         self,

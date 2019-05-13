@@ -99,6 +99,8 @@ class RelationPaginationServlet(RestServlet):
         super(RelationPaginationServlet, self).__init__()
         self.auth = hs.get_auth()
         self.store = hs.get_datastore()
+        self.clock = hs.get_clock()
+        self._event_serializer = hs.get_event_client_serializer()
 
     @defer.inlineCallbacks
     def on_GET(self, request, room_id, parent_id, relation_type=None, event_type=None):
@@ -109,17 +111,31 @@ class RelationPaginationServlet(RestServlet):
         )
 
         limit = parse_integer(request, "limit", default=5)
+        from_token = parse_string(request, "from")
+        to_token = parse_string(request, "to")
 
         # FIXME: Do filtering?
 
-        res = yield self.store.get_relations_for_event(
+        result = yield self.store.get_relations_for_event(
             event_id=parent_id,
             relation_type=relation_type,
             event_type=event_type,
             limit=limit,
+            from_token=from_token,
+            to_token=to_token,
         )
 
-        defer.returnValue((200, res.to_dict()))
+        events = yield self.store.get_events_as_array(
+            [c["event_id"] for c in result.chunk]
+        )
+
+        now = self.clock.time_msec()
+        events = yield self._event_serializer.serialize_events(events, now)
+
+        return_value = result.to_dict()
+        return_value["chunk"] = events
+
+        defer.returnValue((200, return_value))
 
 
 class RelationAggregationPaginationServlet(RestServlet):
@@ -146,17 +162,80 @@ class RelationAggregationPaginationServlet(RestServlet):
             raise SynapseError(400, "Relation type must be 'annotation'")
 
         limit = parse_integer(request, "limit", default=5)
+        from_token = parse_string(request, "from")
+        to_token = parse_string(request, "to")
 
         # FIXME: Do filtering?
 
         res = yield self.store.get_aggregation_groups_for_event(
-            event_id=parent_id, event_type=event_type, limit=limit
+            event_id=parent_id,
+            event_type=event_type,
+            limit=limit,
+            from_token=from_token,
+            to_token=to_token,
         )
 
         defer.returnValue((200, res.to_dict()))
+
+
+class RelationAggregationGroupPaginationServlet(RestServlet):
+    PATTERNS = client_v2_patterns(
+        "/rooms/(?P<room_id>[^/]*)/aggregations/(?P<parent_id>[^/]*)"
+        "/(?P<relation_type>[^/]*)/(?P<event_type>[^/]*)/(?P<key>[^/]*)$",
+        releases=(),
+    )
+
+    def __init__(self, hs):
+        super(RelationAggregationGroupPaginationServlet, self).__init__()
+        self.auth = hs.get_auth()
+        self.store = hs.get_datastore()
+        self.clock = hs.get_clock()
+        self._event_serializer = hs.get_event_client_serializer()
+
+    @defer.inlineCallbacks
+    def on_GET(self, request, room_id, parent_id, relation_type, event_type, key):
+        requester = yield self.auth.get_user_by_req(request, allow_guest=True)
+
+        yield self.auth.check_in_room_or_world_readable(
+            room_id, requester.user.to_string()
+        )
+
+        if relation_type != RelationTypes.ANNOTATION:
+            raise SynapseError(400, "Relation type must be 'annotation'")
+
+        limit = parse_integer(request, "limit", default=5)
+        from_token = parse_string(request, "from")
+        to_token = parse_string(request, "to")
+
+        # FIXME: Do filtering?
+
+        result = yield self.store.get_relations_for_event(
+            event_id=parent_id,
+            relation_type=relation_type,
+            event_type=event_type,
+            aggregation_key=key,
+            limit=limit,
+            from_token=from_token,
+            to_token=to_token,
+        )
+
+        events = yield self.store.get_events_as_array(
+            [c["event_id"] for c in result.chunk]
+        )
+
+        now = self.clock.time_msec()
+        events = yield self._event_serializer.serialize_events(events, now)
+
+        return_value = result.to_dict()
+        return_value["chunk"] = events
+
+        defer.returnValue((200, return_value))
+
+        defer.returnValue((200, return_value))
 
 
 def register_servlets(hs, http_server):
     RelationSendServlet(hs).register(http_server)
     RelationPaginationServlet(hs).register(http_server)
     RelationAggregationPaginationServlet(hs).register(http_server)
+    RelationAggregationGroupPaginationServlet(hs).register(http_server)
