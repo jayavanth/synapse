@@ -54,6 +54,13 @@ UNIX_TIMESTAMP=$(date +%s%3N --date='TZ="UTC+2" '"$TIME")
 #EVENT_ID='$1471814088343495zpPNI:matrix.org' # an example event from 21st of Aug 2016 by Matthew
 
 ###################################################################################################
+# choose message type. `m.room.message` is for unencrypted rooms and `m.room.encrypted` is for
+# messages in encrypted rooms.
+###################################################################################################
+MESSAGE_TYPE='m.room.message'
+
+
+###################################################################################################
 # make the admin user a server admin in the database with
 ###################################################################################################
 # psql -A -t --dbname=synapse -c "UPDATE users SET admin=1 WHERE name LIKE '$ADMIN'"
@@ -96,7 +103,7 @@ for ROOM in "${ROOMS_ARRAY[@]}"; do
     sql "SELECT * FROM room_aliases WHERE room_id='$ROOM'"
     echo "get event..."
     # for postgres:
-    EVENT_ID=$(sql "SELECT event_id FROM events WHERE type='m.room.message' AND received_ts<'$UNIX_TIMESTAMP' AND room_id='$ROOM' ORDER BY received_ts DESC LIMIT 1;")
+    EVENT_ID=$(sql "SELECT event_id FROM events WHERE type='$MESSAGE_TYPE' AND received_ts<'$UNIX_TIMESTAMP' AND room_id='$ROOM' ORDER BY received_ts DESC LIMIT 1;")
     if [ "$EVENT_ID" == "" ]; then
       echo "no event $TIME"
     else
