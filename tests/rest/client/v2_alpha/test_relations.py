@@ -328,6 +328,42 @@ class RelationsTestCase(unittest.HomeserverTestCase):
             {RelationTypes.REPLACES: {"event_id": edit_event_id}},
         )
 
+    def test_multi_edit(self):
+        channel = self._send_relation(
+            RelationTypes.REPLACES,
+            "m.room.message",
+            content={"msgtype": "m.text", "body": "First edit"},
+        )
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        new_body = {"msgtype": "m.text", "body": "I've been edited!"}
+        channel = self._send_relation(
+            RelationTypes.REPLACES, "m.room.message", content=new_body
+        )
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        edit_event_id = channel.json_body["event_id"]
+
+        channel = self._send_relation(
+            RelationTypes.REPLACES,
+            "m.room.message.WRONG_TYPE",
+            content={"msgtype": "m.text", "body": "Edit, but wrong type"},
+        )
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        request, channel = self.make_request(
+            "GET", "/rooms/%s/event/%s" % (self.room, self.parent_id)
+        )
+        self.render(request)
+        self.assertEquals(200, channel.code, channel.json_body)
+
+        self.assertEquals(channel.json_body["content"], new_body)
+
+        self.assertEquals(
+            channel.json_body["unsigned"].get("m.relations"),
+            {RelationTypes.REPLACES: {"event_id": edit_event_id}},
+        )
+
     def _send_relation(self, relation_type, event_type, key=None, content={}):
         query = ""
         if key:
