@@ -17,6 +17,8 @@ from synapse.api.constants import EventTypes, RelationTypes
 from synapse.rest.client.v1 import login, room
 from synapse.rest.client.v2_alpha import relations
 
+import six
+
 from tests import unittest
 
 
@@ -34,7 +36,7 @@ class RelationsTestCase(unittest.HomeserverTestCase):
         self.parent_id = res["event_id"]
 
     def test_send_relation(self):
-        channel = self._send_relation(RelationTypes.ANNOTATION, "m.reaction", key="a")
+        channel = self._send_relation(RelationTypes.ANNOTATION, "m.reaction", key="👍")
         self.assertEquals(200, channel.code, channel.json_body)
 
         event_id = channel.json_body["event_id"]
@@ -52,7 +54,7 @@ class RelationsTestCase(unittest.HomeserverTestCase):
                 "content": {
                     "m.relates_to": {
                         "event_id": self.parent_id,
-                        "key": "a",
+                        "key": "👍",
                         "rel_type": RelationTypes.ANNOTATION,
                     }
                 },
@@ -180,7 +182,7 @@ class RelationsTestCase(unittest.HomeserverTestCase):
     def _send_relation(self, relation_type, event_type, key=None):
         query = ""
         if key:
-            query = "?key=" + key
+            query = "?key=" + six.moves.urllib.parse.quote_plus(key)
 
         request, channel = self.make_request(
             "POST",

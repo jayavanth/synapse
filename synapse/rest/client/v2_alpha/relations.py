@@ -66,7 +66,7 @@ class RelationSendServlet(RestServlet):
 
         content = parse_json_object_from_request(request)
 
-        aggregation_key = parse_string(request, "key")
+        aggregation_key = parse_string(request, "key", encoding="utf-8")
 
         content["m.relates_to"] = {
             "event_id": parent_id,
