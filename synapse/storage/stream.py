@@ -108,7 +108,7 @@ def generic_bound(bound, names, values, engine):
 
 def lower_bound(token, engine, inclusive=False):
     return generic_bound(
-        "<=" if inclusive else "<"
+        "<=" if inclusive else "<",
         ("topological_ordering", "stream_ordering",),
         (token.topological, token.stream,),
         engine,
@@ -117,7 +117,7 @@ def lower_bound(token, engine, inclusive=False):
 
 def upper_bound(token, engine, inclusive=True):
     return generic_bound(
-        ">=" if inclusive else ">"
+        ">=" if inclusive else ">",
         ("topological_ordering", "stream_ordering",),
         (token.topological, token.stream,),
         engine,
